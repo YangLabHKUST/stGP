@@ -20,6 +20,14 @@ alt="Overview" />
 
 ## Installation
 
+stGP can be installed from PyPI:
+
+```shell
+$ pip install stgp
+```
+
+Alternatively, stGP can be downloaded from GitHub:
+
 ```bash
 # Clone the repository
 cd stGP
