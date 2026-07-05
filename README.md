@@ -12,28 +12,47 @@ stGP's effectiveness relies on our innovations in the integration of Gaussian pr
 - stGP decomposes per-cell program activity into a sample-level temporal component that captures coordinated responses over biological time (e.g., age or stage), and a within-section spatial component that characterizes dynamic program deployment across tissue coordinates without requiring cross-section registration.
 - For multi-program inference, stGP adopts a blockwise backfitting scheme that sequentially extracts rank-1 components from residuals, with automatic model selection to determine the number of programs.
 
-<figure>
-<img src="FigureReproducing/Fig1_overview.png" style="width:85.0%"
-alt="Overview" />
-</figure>
+<p align="center">
+  <img src="FigureReproducing/Fig1_overview.png" width="85%" alt="Overview" />
+</p>
 
 
 ## Installation
 
-stGP can be installed from PyPI:
+To install the released `stgp` package from PyPI into your current Python
+environment:
 
 ```shell
-$ pip install stgp
+pip install stgp
 ```
 
-Alternatively, stGP can be downloaded from GitHub:
+To reproduce the notebook from the GitHub repository, you can also install the stGP environment from GitHub:
 
 ```bash
-# Clone the repository
+git clone https://github.com/YangLabHKUST/stGP.git
 cd stGP
 conda env create -f stGP.yml
 conda activate stGP
+pip install -e .
 ```
+
+Normally the installation time will be less than twenty minutes. We have tested our package on Linux (Ubuntu 22.04.5 LTS).
+
+## Tutorials and Reproducibility
+
+The tutorials for using stGP and codes for reproducing the analysis results presented in our paper are available on the tutorial website (<https://stgp-tutorial.readthedocs.io>).
+
+- [Human aging DLPFC contating the benchmarking study and niche validation](https://stgp-tutorial.readthedocs.io/en/latest/tutorials/human_aging_dlpfc/index.html)
+- [Mouse aging brain to discover the proximity effect](https://stgp-tutorial.readthedocs.io/en/latest/tutorials/mouse_aging_brain/index.html)
+- [Mouse injured kidney with paired biological replicates](https://stgp-tutorial.readthedocs.io/en/latest/tutorials/mouse_injured_kidney/index.html)
+
+You may also use the notebooks and codes in this repository to reproducing the figures in the manuscript.
+
+The full benchmarking codes and results are released at a separate repository: <https://github.com/Jamesyu420/stop-reproduce>.
+
+## Data Availability
+
+The aging mouse brain MERFISH dataset4 can be accessed from Zenodo at (<https://doi.org/10.5281/zenodo.13883177>). The aging human brain DLPFC MERFISH dataset5 can be obtained from (<https://publications.wenglab.org/SomaMut/>). The mouse kidney injury and repair Xenium dataset7 is available from (<https://doi.org/10.6084/m9.figshare.28761695.v1>).
 
 ## Reference
 

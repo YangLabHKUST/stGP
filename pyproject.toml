@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stgp"
+version = "0.1.0"
+description = "Spatiotemporal gene program discovery with Gaussian process priors"
+readme = "stgp/README.md"
+requires-python = ">=3.9"
+license = "MIT"
+authors = [
+    { name = "Baichen Yu", email = "mabyu@ust.hk" },
+]
+maintainers = [
+    { name = "Baichen Yu", email = "mabyu@ust.hk" },
+]
+dependencies = [
+    "numpy>=1.22,<3.0",
+    "scipy>=1.10",
+]
+keywords = [
+    "spatial transcriptomics",
+    "gene programs",
+    "gaussian process",
+    "matrix factorization",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+[project.urls]
+Homepage = "https://github.com/YangLabHKUST/stGP"
+Repository = "https://github.com/YangLabHKUST/stGP"
+
+[tool.setuptools.packages.find]
+include = ["stgp*"]

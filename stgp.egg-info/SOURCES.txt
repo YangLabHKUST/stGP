@@ -1,0 +1,13 @@
+LICENSE
+README.md
+pyproject.toml
+stgp/README.md
+stgp/__init__.py
+stgp/estimation.py
+stgp/kernels.py
+stgp/preprocessing.py
+stgp.egg-info/PKG-INFO
+stgp.egg-info/SOURCES.txt
+stgp.egg-info/dependency_links.txt
+stgp.egg-info/requires.txt
+stgp.egg-info/top_level.txt
