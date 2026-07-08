@@ -19,8 +19,7 @@ stGP's effectiveness relies on our innovations in the integration of Gaussian pr
 
 ## Installation
 
-To install the released `stgp` package from PyPI into your current Python
-environment:
+To install the released `stgp` package from PyPI into your current Python environment:
 
 ```shell
 pip install stgp
@@ -36,7 +35,7 @@ conda activate stGP
 pip install -e .
 ```
 
-Normally the installation time will be less than twenty minutes. We have tested our package on Linux (Ubuntu 22.04.5 LTS).
+Normally the installation time will be about twenty minutes. We have tested our package on Linux (Ubuntu 22.04.5 LTS).
 
 ## Tutorials and Reproducibility
 
@@ -48,11 +47,11 @@ The tutorials for using stGP and codes for reproducing the analysis results pres
 
 You may also use the notebooks and codes in this repository to reproducing the figures in the manuscript.
 
-The full benchmarking codes and results are released at a separate repository: <https://github.com/Jamesyu420/stop-reproduce>.
+The full benchmarking codes and results are released at a separate repository: <https://github.com/Jamesyu420/stgp-reproduce>.
 
 ## Data Availability
 
-The aging mouse brain MERFISH dataset4 can be accessed from Zenodo at (<https://doi.org/10.5281/zenodo.13883177>). The aging human brain DLPFC MERFISH dataset5 can be obtained from (<https://publications.wenglab.org/SomaMut/>). The mouse kidney injury and repair Xenium dataset7 is available from (<https://doi.org/10.6084/m9.figshare.28761695.v1>).
+The aging mouse brain MERFISH dataset can be accessed from Zenodo at (<https://doi.org/10.5281/zenodo.13883177>). The aging human brain DLPFC MERFISH dataset can be obtained from (<https://publications.wenglab.org/SomaMut/>). The mouse kidney injury and repair Xenium dataset is available from (<https://doi.org/10.6084/m9.figshare.28761695.v1>).
 
 ## Reference
 

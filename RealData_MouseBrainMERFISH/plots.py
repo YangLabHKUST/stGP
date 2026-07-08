@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import matplotlib as mpl
+from IPython.display import display
 
 
 @dataclass(frozen=True)
@@ -100,10 +101,48 @@ class MethodResult:
     gene_weights: pd.DataFrame | None = None
 
 
-def _read_h5ad(p: Path) -> ad.AnnData:
-    if not p.exists():
-        raise FileNotFoundError(f"Missing file: {p}")
-    return ad.read_h5ad(p)
+def read_h5ad_compat(
+    path: str | Path,
+    *,
+    cache_dir: str | Path | None = None,
+) -> ad.AnnData:
+    """Read h5ad files even in older AnnData environments used by NicheScope."""
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Missing file: {path}")
+
+    try:
+        return ad.read_h5ad(path)
+    except Exception as err:
+        msg = str(err)
+        if "null" not in msg.lower() and "IOSpec" not in msg and "No read method" not in msg:
+            raise
+
+    import h5py
+    import shutil
+
+    cache_dir = Path(cache_dir) if cache_dir is not None else path.parent
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    fixed = cache_dir / f"{path.stem}_niche_scope_compat.h5ad"
+    if not fixed.exists() or fixed.stat().st_mtime < path.stat().st_mtime:
+        shutil.copy2(path, fixed)
+
+    with h5py.File(fixed, "a") as h5:
+        null_nodes: list[str] = []
+
+        def collect_null_nodes(name, obj):
+            enc = obj.attrs.get("encoding-type")
+            if isinstance(enc, bytes):
+                enc = enc.decode()
+            if enc == "null":
+                null_nodes.append(name)
+
+        h5.visititems(collect_null_nodes)
+        for name in sorted(null_nodes, key=lambda p: p.count("/"), reverse=True):
+            if name in h5:
+                del h5[name]
+
+    return ad.read_h5ad(fixed)
 
 
 def _scores_from_obsm(
@@ -127,6 +166,16 @@ def _maybe_read_csv(path: Path) -> pd.DataFrame | None:
     return pd.read_csv(path, index_col=0)
 
 
+def save_pair(fig, stem, out_dir, *, dpi=400, bbox_inches="tight", pad_inches=0.04):
+    png = out_dir / f"{stem}.png"
+    pdf = out_dir / f"{stem}.pdf"
+    fig.savefig(png, dpi=dpi, bbox_inches=bbox_inches, pad_inches=pad_inches)
+    fig.savefig(pdf, bbox_inches=bbox_inches, pad_inches=pad_inches)
+    display(fig)
+    plt.close(fig)
+    return png, pdf
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # Per-method loaders
 # ════════════════════════════════════════════════════════════════════════════
@@ -136,7 +185,7 @@ def load_stgp(result_dir: str | Path, *, celltype: str) -> MethodResult:
     the W.csv row labels (so callers see the same labels everywhere).
     """
     result_dir = Path(result_dir)
-    adata = _read_h5ad(result_dir / "adata_with_scores.h5ad")
+    adata = read_h5ad_compat(result_dir / "adata_with_scores.h5ad")
     scores, default_cols = _scores_from_obsm(adata, "X_stgp", "stGP")
 
     gene_weights = _maybe_read_csv(result_dir / "W.csv")
@@ -149,7 +198,7 @@ def load_stgp(result_dir: str | Path, *, celltype: str) -> MethodResult:
 def load_spatialpca(result_dir: str | Path, *, celltype: str) -> MethodResult:
     """SpatialPCA stores loadings as (genes x SPCA), so transpose them."""
     result_dir = Path(result_dir)
-    adata = _read_h5ad(result_dir / "adata_with_scores.h5ad")
+    adata = read_h5ad_compat(result_dir / "adata_with_scores.h5ad")
     scores, _ = _scores_from_obsm(adata, "X_spatialpca", "SPCA")
 
     gene_weights = None
@@ -164,7 +213,7 @@ def load_spatialpca(result_dir: str | Path, *, celltype: str) -> MethodResult:
 
 def load_mefisto(result_dir: str | Path, *, celltype: str) -> MethodResult:
     result_dir = Path(result_dir)
-    adata = _read_h5ad(result_dir / "adata_with_scores.h5ad")
+    adata = read_h5ad_compat(result_dir / "adata_with_scores.h5ad")
     scores, _ = _scores_from_obsm(adata, "X_mefisto", "MEFISTO")
     gene_weights = _maybe_read_csv(result_dir / "weights.csv")
     return MethodResult("MEFISTO", str(celltype), result_dir, adata, scores, gene_weights)
@@ -172,7 +221,7 @@ def load_mefisto(result_dir: str | Path, *, celltype: str) -> MethodResult:
 
 def load_stamp(result_dir: str | Path, *, celltype: str) -> MethodResult:
     result_dir = Path(result_dir)
-    adata = _read_h5ad(result_dir / "adata_with_scores.h5ad")
+    adata = read_h5ad_compat(result_dir / "adata_with_scores.h5ad")
     scores, _ = _scores_from_obsm(adata, "X_stamp", "STAMP")
     gene_weights = _maybe_read_csv(result_dir / "W_loadings.csv")
     return MethodResult("STAMP", str(celltype), result_dir, adata, scores, gene_weights)
@@ -299,7 +348,7 @@ def load_popari(result_dir: str | Path, *, celltype: str) -> MethodResult:
         raise FileNotFoundError(f"Missing file: {h5ad_path}")
 
     try:
-        adata = ad.read_h5ad(h5ad_path)
+        adata = read_h5ad_compat(h5ad_path, cache_dir=result_dir)
     except Exception as e:
         # anndata < 0.12 raises IORegistryError for null-encoded fields.
         if "null" in str(e).lower() or "IOSpec" in str(e) or "No read method" in str(e):
@@ -576,14 +625,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
-
-
-def _save(fig: plt.Figure, out: str | Path | None, *, dpi: int = 400) -> None:
-    if out is None:
-        return
-    out = Path(out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=dpi, bbox_inches="tight")
 
 
 def plot_similarity_heatmap(
@@ -1058,12 +1099,6 @@ def _normalise_slice_xy(xy: np.ndarray, ref_xy: np.ndarray | None = None) -> np.
     return centred / radius
 
 
-def _maybe_subsample(n: int, max_n: int | None, rng: np.random.Generator) -> np.ndarray:
-    if max_n is None or n <= max_n:
-        return np.arange(n)
-    return np.sort(rng.choice(n, size=max_n, replace=False))
-
-
 def _select_mice_by_target_ages(
     obs: pd.DataFrame,
     target_ages: Iterable[float],
@@ -1177,7 +1212,11 @@ def plot_spacetime_cluster_stack(
 
         if mid in bg_by_mouse:
             bg_xy = _normalise_slice_xy(bg_by_mouse[mid], ref_xy)
-            bg_sel = _maybe_subsample(bg_xy.shape[0], max_bg_per_slice, rng)
+            bg_sel = np.arange(bg_xy.shape[0])
+            if max_bg_per_slice is not None and bg_xy.shape[0] > max_bg_per_slice:
+                bg_sel = np.sort(
+                    rng.choice(bg_xy.shape[0], size=max_bg_per_slice, replace=False)
+                )
             ax.scatter(
                 bg_xy[bg_sel, 0], bg_xy[bg_sel, 1], np.full(bg_sel.size, z),
                 c="#D8D8D8", s=bg_dot_size, alpha=0.10,
@@ -1186,7 +1225,11 @@ def plot_spacetime_cluster_stack(
 
         fg_xy = _normalise_slice_xy(sp[fg_mask], ref_xy)
         fg_labels = cluster_labels[fg_mask]
-        fg_sel = _maybe_subsample(fg_xy.shape[0], max_fg_per_slice, rng)
+        fg_sel = np.arange(fg_xy.shape[0])
+        if max_fg_per_slice is not None and fg_xy.shape[0] > max_fg_per_slice:
+            fg_sel = np.sort(
+                rng.choice(fg_xy.shape[0], size=max_fg_per_slice, replace=False)
+            )
         fg_xy = fg_xy[fg_sel]
         fg_labels = fg_labels[fg_sel]
         for c in uniq_clusters:
@@ -1274,7 +1317,11 @@ def plot_spacetime_embedding_stack(
 
         if mid in bg_by_mouse:
             bg_xy = _normalise_slice_xy(bg_by_mouse[mid], ref_xy)
-            bg_sel = _maybe_subsample(bg_xy.shape[0], max_bg_per_slice, rng)
+            bg_sel = np.arange(bg_xy.shape[0])
+            if max_bg_per_slice is not None and bg_xy.shape[0] > max_bg_per_slice:
+                bg_sel = np.sort(
+                    rng.choice(bg_xy.shape[0], size=max_bg_per_slice, replace=False)
+                )
             ax.scatter(
                 bg_xy[bg_sel, 0], bg_xy[bg_sel, 1], np.full(bg_sel.size, z),
                 c="#D8D8D8", s=bg_dot_size, alpha=0.10,
@@ -1283,7 +1330,11 @@ def plot_spacetime_embedding_stack(
 
         fg_xy = _normalise_slice_xy(sp[fg_mask], ref_xy)
         fg_vals = values[fg_mask]
-        fg_sel = _maybe_subsample(fg_xy.shape[0], max_fg_per_slice, rng)
+        fg_sel = np.arange(fg_xy.shape[0])
+        if max_fg_per_slice is not None and fg_xy.shape[0] > max_fg_per_slice:
+            fg_sel = np.sort(
+                rng.choice(fg_xy.shape[0], size=max_fg_per_slice, replace=False)
+            )
         sc_ref = ax.scatter(
             fg_xy[fg_sel, 0], fg_xy[fg_sel, 1], np.full(fg_sel.size, z),
             c=fg_vals[fg_sel], cmap=cmap, vmin=vmin, vmax=vmax,
@@ -2047,7 +2098,6 @@ def plot_spatial_kernel_corr_combined(
     if "age" not in adata.obs.columns:
         raise KeyError("adata.obs missing 'age' column")
     ages = np.sort(adata.obs["age"].astype(float).unique())
-    slice_idx = min(max(slice_idx, 0), len(ages) - 1)
     target_age = float(ages[slice_idx])
 
     mask = adata.obs["age"].astype(float).to_numpy() == target_age
@@ -2272,15 +2322,14 @@ def plot_active_gene_dotplot(
     cb.ax.tick_params(labelsize=10)
 
     # Size legend tucked just below the x-axis tick labels.
-    # Clamp pct values to [smin, smax] to avoid negative sizes when smin > 0.25.
-    _legend_pcts = np.clip([0.25, 0.50, 0.75], smin, smax) if smin < smax else np.full(3, smin)
+    _legend_pcts = np.linspace(smin, smax, 3) if smin < smax else np.full(3, smin)
     _legend_sizes = [
         25 + 350 * (float(p) - smin) / (smax - smin + 1e-12)
         for p in _legend_pcts
     ]
-    for pct, s in zip([0.25, 0.50, 0.75], _legend_sizes):
-        ax.scatter([], [], s=max(1.0, s), c="grey", edgecolors="k", linewidths=0.25,
-                   label=f"{int(pct * 100)}%")
+    for pct, s in zip(_legend_pcts, _legend_sizes):
+        ax.scatter([], [], s=s, c="grey", edgecolors="k", linewidths=0.25,
+                   label=f"{int(round(pct * 100))}%")
     ax.legend(title="% expr.", loc="upper center",
               bbox_to_anchor=(0.5, -0.07), ncol=3, frameon=False,
               fontsize=10, title_fontsize=10)

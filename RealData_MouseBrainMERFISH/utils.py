@@ -8,43 +8,58 @@ analysis flow visible.
 
 import json
 import os
+import pickle
+import re
 import time
 import traceback
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+from typing import Callable
 
+import anndata as ad
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import scanpy as sc
+import scipy.sparse as sp
+from scipy.optimize import linear_sum_assignment
+from scipy.spatial import cKDTree
+from scipy.stats import mannwhitneyu, norm, spearmanr
+from sklearn.cluster import SpectralClustering
+from sklearn.neighbors import NearestNeighbors
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from statsmodels.stats.multitest import multipletests
+
+from plots import MethodResult, load_method
+from plots import (
+    plot_active_gene_dotplot,
+    plot_alpha_over_age,
+    plot_gene_trajectories_over_age,
+    plot_popari_spatial_programs,
+    plot_program_weighted_scores_by_age,
+    plot_program_variance_partition,
+    plot_runtime_comparison,
+    plot_spacetime_cluster_stack,
+    plot_spacetime_embedding_stack,
+    plot_spatial_kernel_corr_combined,
+    plot_spatial_cluster_single_slice,
+    plot_benchmark_cluster_methods_single_slice,
+    plot_spatial_programs_selected_slices,
+    plot_stgp_spatial_programs,
+    plot_W_program_heatmap,
+)
+from plots import (
+    cosine_similarity_matrix,
+    hungarian_match,
+    jaccard_top_genes_matrix,
+    standardize_gene_weights,
+)
+from plots import plot_recovery_dotplot, plot_similarity_heatmap
+from plots import run_enrichment_for_program
 
 
 # ════════════════════════════════════════════════════════════════════════════
 # Cell-type lists
 # ════════════════════════════════════════════════════════════════════════════
-
-# Alphabetical order — used by tables, summaries and the enrichment pipeline.
-ALL_CELLTYPES: list[str] = [
-    "Astrocyte",
-    "Endothelial",
-    "Ependymal",
-    "Macrophage",
-    "Microglia",
-    "Neuroblast",
-    "Neuron-Excitatory",
-    "Neuron-MSN",
-    "NSC",
-    "Oligodendrocyte",
-    "OPC",
-    "Pericyte",
-    "T cell",
-    "VSMC",
-]
-
-# Run order used by the stGP and proximity notebook sections. Microglia first so
-# the user sees the headline cell type quickly when running the full pipeline.
-RUN_ORDER_CELLTYPES: list[str] = [
-    "Microglia", "T cell", "NSC", "Neuroblast", "Macrophage", "Ependymal",
-    "VSMC", "Pericyte", "OPC", "Endothelial", "Astrocyte", "Neuron-MSN",
-    "Oligodendrocyte", "Neuron-Excitatory",
-]
 
 # Run order used by the baseline drivers (03a / 03b / 03c / 03d). Smallest cell types
 # first so the slower baselines (MEFISTO, STAMP) clear quickly on the cheap
@@ -77,6 +92,13 @@ TIMING_LOG = Path("Results/benchmark_runtimes.jsonl")
 def safe_name(celltype: str) -> str:
     """Filesystem-safe variant of a cell-type name (e.g. 'T cell' -> 'T_cell')."""
     return "".join(c if c.isalnum() or c in "-_" else "_" for c in celltype)
+
+
+def p_to_stars(pval, *, nan_label="n.s.", nonsig_label="n.s."):
+    """Format a p-value as significance stars for compact figure labels."""
+    if not np.isfinite(pval):
+        return nan_label
+    return "***" if pval < 0.001 else ("**" if pval < 0.01 else ("*" if pval < 0.05 else nonsig_label))
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -145,87 +167,6 @@ def time_and_log_baseline(
     return status
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# CLI helpers shared by the pipeline drivers
-# ════════════════════════════════════════════════════════════════════════════
-
-def resolve_celltypes(
-    *,
-    all_flag: bool,
-    celltypes: Iterable[str] | None,
-    default: Sequence[str] = RUN_ORDER_CELLTYPES,
-    single: str | None = None,
-) -> list[str]:
-    """Resolve a CLI selection of cell types.
-
-    Priority: `--celltype X` (single) → `--celltypes X Y` → `--all` → []. The
-    caller is responsible for raising an error when nothing was selected.
-    """
-    if single:
-        return [single]
-    if celltypes:
-        return list(celltypes)
-    if all_flag:
-        return list(default)
-    return []
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# Figure source-table helpers
-# ════════════════════════════════════════════════════════════════════════════
-import argparse
-import json
-import pickle
-import re
-import sys
-import traceback
-from pathlib import Path
-
-import matplotlib
-matplotlib.use("Agg")
-
-import anndata as ad
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import scipy.sparse as sp
-from scipy.optimize import linear_sum_assignment
-from sklearn.cluster import SpectralClustering
-from sklearn.neighbors import NearestNeighbors
-from sklearn.preprocessing import StandardScaler
-
-from plots import MethodResult, load_method
-from plots import (
-    aggregate_by_mouse_region,
-    variance_partition_age_region_unique,
-)
-from plots import (
-    plot_active_gene_dotplot,
-    plot_alpha_over_age,
-    plot_gene_trajectories_over_age,
-    plot_popari_spatial_programs,
-    plot_program_weighted_scores_by_age,
-    plot_program_variance_partition,
-    plot_runtime_comparison,
-    plot_spacetime_cluster_stack,
-    plot_spacetime_embedding_stack,
-    plot_spatial_kernel_corr_combined,
-    plot_spatial_cluster_single_slice,
-    plot_benchmark_cluster_methods_single_slice,
-    plot_spatial_programs_selected_slices,
-    plot_stgp_spatial_programs,
-    plot_W_program_heatmap,
-)
-from plots import (
-    cosine_similarity_matrix,
-    hungarian_match,
-    jaccard_top_genes_matrix,
-    standardize_gene_weights,
-)
-from plots import plot_recovery_dotplot, plot_similarity_heatmap
-from plots import set_nature_style
-
-
 # Methods whose gene weights are signed (can be negative). For others (Popari /
 # STAMP) we treat the weights as non-negative loadings.
 _SIGNED_METHODS = {"SpatialPCA", "MEFISTO"}
@@ -235,23 +176,6 @@ _SELECTED_SPATIAL_AGES = (6.6, 18.8, 24.6, 34.5)
 # ════════════════════════════════════════════════════════════════════════════
 # Variance partition helpers
 # ════════════════════════════════════════════════════════════════════════════
-
-def _compute_varpart_ols(*, obs: pd.DataFrame, scores: pd.DataFrame) -> pd.DataFrame:
-    """OLS-based variance decomposition (Age / Region / Both / Residuals)."""
-    agg = aggregate_by_mouse_region(obs, scores)
-    rows = []
-    for c in scores.columns:
-        res = variance_partition_age_region_unique(
-            agg[c].to_numpy(),
-            age=agg["age"].to_numpy(),
-            region=agg["region"].to_numpy(),
-        )
-        rows.append(dict(component=str(c),
-                          Age=float(res.age), Region=float(res.region),
-                          Both=float(res.shared), Residuals=float(res.residuals),
-                          R2=float(res.r2)))
-    return pd.DataFrame(rows).set_index("component")
-
 
 def _compute_stgp_varpart_from_model(
     stgp_result: dict, prog_labels: list[str],
@@ -480,12 +404,6 @@ def _pick_pseudotime_mouse(adata, emb: np.ndarray) -> str | None:
     return str(df.sort_values("score", ascending=False).iloc[0]["mouse_id"])
 
 
-def _spatial_axis_off(ax) -> None:
-    ax.set_aspect("equal")
-    ax.invert_yaxis()
-    ax.axis("off")
-
-
 def _plot_pseudotime_spatial(adata_slice, *, pt_col: str, out: Path) -> None:
     xy = np.asarray(adata_slice.obsm["spatial"], dtype=float)
     pt = pd.to_numeric(adata_slice.obs[pt_col], errors="coerce").to_numpy(float)
@@ -494,7 +412,9 @@ def _plot_pseudotime_spatial(adata_slice, *, pt_col: str, out: Path) -> None:
         xy[:, 0], xy[:, 1], c=pt, s=5, cmap="viridis",
         linewidths=0, rasterized=True,
     )
-    _spatial_axis_off(ax)
+    ax.set_aspect("equal")
+    ax.invert_yaxis()
+    ax.axis("off")
     cbar = fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.02)
     cbar.set_label("Slingshot pseudotime")
     save_fig(fig, out, dpi=400)
@@ -515,7 +435,9 @@ def _plot_domain_spatial(adata_slice, *, out: Path) -> None:
             color=cmap(i / max(len(cats) - 1, 1)),
             label=f"Domain {label}",
         )
-    _spatial_axis_off(ax)
+    ax.set_aspect("equal")
+    ax.invert_yaxis()
+    ax.axis("off")
     ax.legend(
         title="Domain", markerscale=2.2,
         bbox_to_anchor=(1.02, 1), loc="upper left", frameon=False,
@@ -647,30 +569,12 @@ def _section1_variance_decomposition(
     print("  [fig] Variance decomposition (stGP) ...")
     stgp_vdf: pd.DataFrame | None = None
 
-    if stgp_res is not None:
-        try:
-            prog_labels = stgp.scores.columns.astype(str).tolist()
-            stgp_vdf = _compute_stgp_varpart_from_model(stgp_res, prog_labels)
-            stgp_vdf.to_csv(fig_dir / f"{safe_ct}_stGP_varpart.csv")
-        except Exception as e:
-            print(f"    [skip model varpart] {e}")
+    prog_labels = stgp.scores.columns.astype(str).tolist()
+    stgp_vdf = _compute_stgp_varpart_from_model(stgp_res, prog_labels)
+    stgp_vdf.to_csv(fig_dir / f"{safe_ct}_stGP_varpart.csv")
 
-    if stgp_vdf is None:
-        # Fallback: post-hoc OLS partition on the stGP scores.
-        need = ["mouse_id", "age", "region"]
-        if all(c in stgp.adata.obs.columns for c in need):
-            try:
-                var_df = _compute_varpart_ols(obs=stgp.adata.obs, scores=stgp.scores)
-                stgp_vdf = var_df[[c for c in ["Age", "Region", "Both", "Residuals"]
-                                    if c in var_df.columns]]
-                var_df.to_csv(fig_dir / f"{safe_ct}_stGP_varpart_ols.csv")
-            except Exception as e:
-                print(f"    [skip OLS varpart] {e}")
-
-    if stgp_vdf is not None:
-        fig = plot_program_variance_partition(
-            stgp_vdf, title=None)
-        save_fig(fig, fig_dir / f"{safe_ct}_stGP_variance_partition.png")
+    fig = plot_program_variance_partition(stgp_vdf, title=None)
+    save_fig(fig, fig_dir / f"{safe_ct}_stGP_variance_partition.png")
 
     return stgp_vdf
 
@@ -1020,8 +924,7 @@ def _section6_kernel_diagnostic_and_W_heatmap(
             from scipy.spatial.distance import pdist
             bw_spa = float(np.median(pdist(coords) ** 2)) / 2.0
 
-        # Default to the middle slice (avoids hard-coding 10 which would
-        # silently clip for cell types with fewer slices).
+        # Default to the middle slice instead of hard-coding one slice index.
         n_slices = int(stgp.adata.obs["age"].astype(float).nunique())
         slice_idx_ref = n_slices // 2
 
@@ -1073,35 +976,6 @@ def _section7_timing(
         save_fig(fig, fig_dir / f"{safe_ct}_runtime_comparison.png")
     except Exception as e:
         print(f"    [skip timing fig] {e}")
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# Proximity/downstream helpers
-# ════════════════════════════════════════════════════════════════════════════
-import argparse
-import json
-import sys
-import time
-import traceback
-from pathlib import Path
-
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import scanpy as sc
-from scipy.spatial import cKDTree
-from scipy.stats import (
-    mannwhitneyu,
-    norm,
-    spearmanr,
-)
-from sklearn.preprocessing import OneHotEncoder
-from statsmodels.stats.multitest import multipletests
-
-from plots import set_nature_style
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1614,8 +1488,10 @@ def compute_proximity_enrichment(
 #  Module 7 -- Variance decomposition (single OLS, all cell types as predictors)
 # ════════════════════════════════════════════════════════════════════════════
 
-def _per_cell_log_density(target, glob, density_types: list[str]) -> np.ndarray:
-    """log(1 + count of {ct} cells within DENS_R microns) for every (cell, ct)."""
+def per_cell_log_density(
+    target, glob, density_types: list[str], *, radius: float = DENS_R,
+) -> np.ndarray:
+    """log(1 + count of {ct} cells within radius microns) for every target cell."""
     n = len(target["age"])
     log_density = np.zeros((n, len(density_types)))
     for age in np.unique(target["age"]):
@@ -1629,72 +1505,14 @@ def _per_cell_log_density(target, glob, density_types: list[str]) -> np.ndarray:
             if m.sum() < 1:
                 continue
             tree = cKDTree(glob["coord"][m])
-            cnt = np.array([len(idx_) for idx_ in tree.query_ball_point(xy, r=DENS_R)])
+            cnt = np.array([len(idx_) for idx_ in tree.query_ball_point(xy, r=radius)])
             log_density[idx, ti] = np.log1p(cnt)
     return log_density
 
 
-def compute_variance_decomposition(target, glob, regions, k, target_ct):
-    """Single OLS regression of ``b[:, k]`` on a transparent predictor set.
-
-    Predictors (each row = one target cell):
-        1. ``age``        -- donor age in months (linear residual age effect)
-        2. ``region_*``   -- one-hot region dummies (one per region except the
-                             reference category)
-        3. ``<ct> density`` -- for every non-target cell type ``ct``:
-                               ``log(1 + count of {ct} cells within 50 microns)``
-
-    Note: ``age^2`` is intentionally dropped; its coefficient is essentially
-    zero in every program because b is already the spatial residual after the
-    stGP H factors absorb the smooth age trend.
-
-    Returns ``(df_coefs, meta)``: full-model coefficients + standard errors,
-    and a metadata dict that explicitly lists every predictor group.
-    """
-    density_types = [c for c in ALL_CELLTYPES if c != target_ct]
-    log_density = _per_cell_log_density(target, glob, density_types)
-
-    y = target["B"][:, k]
-    age = target["age"]
-    reg = target["region"]
-    enc = OneHotEncoder(sparse_output=False, drop="first")
-    R_oh = enc.fit_transform(reg.reshape(-1, 1))
-    R_names = [f"region_{c}" for c in enc.categories_[0][1:]]
-    density_names = [f"{c} density" for c in density_types]
-
-    X = np.column_stack([age, R_oh, log_density])
-    xnames = ["age"] + R_names + density_names
-
-    X1c = np.column_stack([np.ones(len(y)), X])
-    beta, *_ = np.linalg.lstsq(X1c, y, rcond=None)
-    yhat = X1c @ beta
-    resid = y - yhat
-    rss = float((resid ** 2).sum())
-    tss = float(((y - y.mean()) ** 2).sum())
-    r2 = 1 - rss / tss
-
-    sigma2 = rss / max(len(y) - X1c.shape[1], 1)
-    try:
-        XtX_inv = np.linalg.inv(X1c.T @ X1c + 1e-8 * np.eye(X1c.shape[1]))
-        se = np.sqrt(sigma2 * np.diag(XtX_inv))
-    except np.linalg.LinAlgError:
-        se = np.full(len(beta), np.nan)
-
-    full_names = ["intercept"] + xnames
-    df_coefs = pd.DataFrame(dict(name=full_names, coef=beta, se=se))
-
-    meta = dict(
-        n_predictors=int(len(xnames)),
-        r2=float(r2),
-        density_types=density_types,
-        region_terms=R_names,
-        age_terms=["age"],
-        density_terms=density_names,
-        notes=dict(
-            density="<ct> density = log(1 + number of <ct> cells within 50 microns)",
-        ),
-    )
-    return df_coefs, meta
+def _per_cell_log_density(target, glob, density_types: list[str]) -> np.ndarray:
+    """Backward-compatible wrapper for older downstream cells/scripts."""
+    return per_cell_log_density(target, glob, density_types)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1730,10 +1548,6 @@ def _add_group_bh_fdr(
             _, q, _, _ = multipletests(df.loc[use_idx, p_col], method="fdr_bh")
             df.loc[use_idx, q_col] = q
     return df
-
-
-def _empty_downstream_frame(columns: list[str]) -> pd.DataFrame:
-    return pd.DataFrame({c: pd.Series(dtype="object") for c in columns})
 
 
 def _shell_counts_by_effector(
@@ -1778,7 +1592,7 @@ def compute_downstream_all_slices_enrichment(
         "R_in", "R_out", "high_pct", "low_pct", "min_group", "valid",
     ]
     if not effectors:
-        return _empty_downstream_frame(columns)
+        return pd.DataFrame(columns=columns)
     if counts_by_eff is None:
         counts_by_eff = _shell_counts_by_effector(target, glob, effectors,
                                                   R_in=R_in, R_out=R_out)
@@ -1832,7 +1646,7 @@ def compute_downstream_per_slice_enrichment(
         "min_group", "valid",
     ]
     if not effectors:
-        return _empty_downstream_frame(columns)
+        return pd.DataFrame(columns=columns)
     if counts_by_eff is None:
         counts_by_eff = _shell_counts_by_effector(target, glob, effectors,
                                                   R_in=R_in, R_out=R_out)
@@ -1891,7 +1705,7 @@ def compute_downstream_per_slice_matched_effects(
         "valid",
     ]
     if not effectors:
-        return _empty_downstream_frame(columns)
+        return pd.DataFrame(columns=columns)
 
     rows = []
     b = target["B"][:, k]
@@ -2924,30 +2738,7 @@ def _summarise_program(df_match, df_perm, target_ct, k_label, demo_age, target,
     )
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# Enrichment helpers
-# ════════════════════════════════════════════════════════════════════════════
-import argparse
-import json
-import sys
-import time
-import traceback
-from pathlib import Path
-
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-
-from plots import run_enrichment_for_program
-from plots import set_nature_style
-
-
-DEFAULT_STGP_ROOT = RESULTS_STGP
 DEFAULT_GENESETS_DIR = Path("data/genesets")
-DEFAULT_FIG_ROOT = FIGURES_ROOT
-DEFAULT_RESULTS_DIR = RESULTS_ENRICHMENT
 
 # Canonical gene-set collections shipped with the notebook.
 DEFAULT_GENE_SETS: dict[str, str] = {
