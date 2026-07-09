@@ -58,7 +58,8 @@ The aging mouse brain MERFISH dataset can be accessed from Zenodo at (<https://d
 If you find `stGP` or any of the source code in this repository useful for your work, please cite:
 > Characterizing dynamic tissue architectures by identifying cell-type-specific spatiotemporal gene programs with stGP.
 > Baichen Yu, Ziyue Tan, Xiaomeng Wan, Hansheng Wang, and Can Yang.
-> Working paper, 2026.
+> Preprint at Biorxiv, 2026.
+> https://doi.org/10.64898/2026.07.03.736035
 
 ## Development
 
