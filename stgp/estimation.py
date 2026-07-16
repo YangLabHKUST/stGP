@@ -926,9 +926,8 @@ def mm_update_theta_rank1(
     One MM update for the rank-1 variance components with fixed w.
     Returns updated (sigma2_age, tau2_spa, sigma2_e) and diagnostics.
 
-    When ``fix_sigma2_e`` is True and ``sigma2_e`` is provided, the noise variance
-    is not updated by the MM step (matches :func:`mom_update_theta_rank1`), so
-    only ``sigma2_age`` and ``tau2_spa`` move while ``sigma2_e`` stays fixed.
+    When ``fix_sigma2_e`` is True and ``sigma2_e`` is provided, only
+    ``sigma2_age`` and ``tau2_spa`` are updated while ``sigma2_e`` stays fixed.
     """
     if fro2 is None:
         fro2 = float(np.sum(Y * Y, dtype=np.float64))
@@ -1002,32 +1001,6 @@ def mm_update_theta_rank1(
 # -----------------------------
 # Rank-1 model fitting
 # -----------------------------
-def _mom_theta_step(
-    Y, w_new, h, tr_Sigma_post, *,
-    K_age, Kspa_list, Nlist, eigvals_list,
-    mom_enforce_nonneg, theta_update_label,
-    variance_floor, fix_sigma2_e, sigma2_e,
-    N, G,
-):
-    """Shared MoM theta-update logic used by 'mom' and 'mom_clip'."""
-    enforce = mom_enforce_nonneg or (theta_update_label == "mom_clip")
-    s2a, t2s, s2e, diag = mom_update_theta_rank1(
-        Y, w_new,
-        K_age=K_age, Kspa_list=Kspa_list, Nlist=Nlist,
-        eigvals_list=eigvals_list, enforce_nonneg=enforce,
-        variance_floor=variance_floor,
-        fix_sigma2_e=fix_sigma2_e, sigma2_e=sigma2_e,
-    )
-    if not fix_sigma2_e:
-        resid = Y - np.outer(h, w_new)
-        w2_new = float(np.dot(w_new, w_new))
-        s2e = max(
-            (float(np.sum(resid * resid)) + w2_new * tr_Sigma_post) / (N * G),
-            1e-12,
-        )
-    return s2a, t2s, s2e, diag
-
-
 def fit_rank1(
     Y_list,
     Nlist,
@@ -1043,8 +1016,6 @@ def fit_rank1(
     init=None,
     fix_sigma2_e=False,
     variance_floor=1e-6,
-    theta_update="mm",
-    mom_enforce_nonneg=False,
     eigvecs_list=None,
 ):
     """
@@ -1052,7 +1023,7 @@ def fit_rank1(
     The routine alternates between:
       - E-step: posterior mean of h via an exact Woodbury solve.
       - M-step: simplex (optionally top-k) projection for w.
-      - Variance update via MM or MoM.
+      - Variance update via MM.
     """
     Y = np.vstack(Y_list)
     N, G = Y.shape
@@ -1079,7 +1050,6 @@ def fit_rank1(
         K_age_inv = precompute_K_age_inv(K_age)
 
     fro2 = float(np.sum(Y * Y, dtype=np.float64))
-    mm_diag = {}
     update = np.inf
 
     for it in range(1, max_iter + 1):
@@ -1102,33 +1072,17 @@ def fit_rank1(
         else:
             w_new = project_simplex(w_uncon)
 
-        # --- Variance update (MM or MoM)
-        if theta_update == "mm":
-            sigma2_age_new, tau2_spa_new, sigma2_e_new, mm_diag = mm_update_theta_rank1(
-                Y, w_new,
-                sigma2_age=sigma2_age, tau2_spa=tau2_spa, sigma2_e=sigma2_e,
-                K_age=K_age, Kspa_list=Kspa_list, Nlist=Nlist,
-                eigvals_list=eigvals_list, K_age_inv=K_age_inv,
-                G=G, fro2=fro2,
-                variance_floor=variance_floor,
-                fix_sigma2_e=fix_sigma2_e,
-                eigvecs_list=eigvecs_list,
-            )
-        elif theta_update in {"mom", "mom_clip"}:
-            sigma2_age_new, tau2_spa_new, sigma2_e_new, mm_diag = _mom_theta_step(
-                Y, w_new, h, tr_Sigma_post,
-                K_age=K_age, Kspa_list=Kspa_list, Nlist=Nlist,
-                eigvals_list=eigvals_list,
-                mom_enforce_nonneg=mom_enforce_nonneg,
-                theta_update_label=theta_update,
-                variance_floor=variance_floor,
-                fix_sigma2_e=fix_sigma2_e, sigma2_e=sigma2_e,
-                N=N, G=G,
-            )
-        else:
-            raise ValueError(
-                "theta_update must be one of {'mm','mom','mom_clip'}"
-            )
+        # --- Variance update (MM)
+        sigma2_age_new, tau2_spa_new, sigma2_e_new, _ = mm_update_theta_rank1(
+            Y, w_new,
+            sigma2_age=sigma2_age, tau2_spa=tau2_spa, sigma2_e=sigma2_e,
+            K_age=K_age, Kspa_list=Kspa_list, Nlist=Nlist,
+            eigvals_list=eigvals_list, K_age_inv=K_age_inv,
+            G=G, fro2=fro2,
+            variance_floor=variance_floor,
+            fix_sigma2_e=fix_sigma2_e,
+            eigvecs_list=eigvecs_list,
+        )
         t3 = time.perf_counter()
 
         eps_rel = 1e-12
@@ -1178,7 +1132,6 @@ def fit_rank1(
         converged=(update < tol),
         last_update=float(update),
         fixed_sigma2_e=bool(fix_sigma2_e),
-        theta_update=str(theta_update),
     )
     return {
         "h": h,
@@ -1210,8 +1163,6 @@ def fit_greedy(
     random_state=0,
     verbose=False,
     variance_floor=1e-6,
-    theta_update="mm",
-    mom_enforce_nonneg=False,
 ):
     Y = stack_or_use(Y_list, dtype=np.float64)
     N, G = Y.shape
@@ -1236,8 +1187,6 @@ def fit_greedy(
             K_age_inv=K_age_inv,
             verbose=(verbose >= 2),
             variance_floor=variance_floor,
-            theta_update=theta_update,
-            mom_enforce_nonneg=mom_enforce_nonneg,
             eigvecs_list=eigvecs_list,
         )
         H[:, j] = rank1["h"]
@@ -1262,7 +1211,7 @@ def split_coupled_factors(
     Nlist, K_age, Kspa_list, k,
     inner_rank1_iters,
     eigvals_list, eigvecs_list, K_age_inv,
-    variance_floor, theta_update, mom_enforce_nonneg,
+    variance_floor,
     random_state,
     N, G,
 ):
@@ -1316,7 +1265,6 @@ def split_coupled_factors(
         max_iter=inner_rank1_iters, eigvals_list=eigvals_list,
         K_age_inv=K_age_inv, random_state=random_state,
         fix_sigma2_e=True, variance_floor=variance_floor,
-        theta_update=theta_update, mom_enforce_nonneg=mom_enforce_nonneg,
         eigvecs_list=eigvecs_list,
         init=init_a,
     )
@@ -1337,7 +1285,6 @@ def split_coupled_factors(
         max_iter=inner_rank1_iters, eigvals_list=eigvals_list,
         K_age_inv=K_age_inv, random_state=random_state + 1,
         fix_sigma2_e=True, variance_floor=variance_floor,
-        theta_update=theta_update, mom_enforce_nonneg=mom_enforce_nonneg,
         eigvecs_list=eigvecs_list,
     )
     H[:, mj] = r1b["h"]
@@ -1376,8 +1323,6 @@ def fit_pfactor(
     init=None,
     random_state=0,
     verbose=0,
-    theta_update="mm",
-    mom_enforce_nonneg=False,
     eigvecs_list=None,
     eigvals_list=None,
     merge_threshold=0.9,
@@ -1410,8 +1355,6 @@ def fit_pfactor(
         fit_init = fit_greedy(
             Y_list, Nlist, K_age, Kspa_list, p, k,
             variance_floor=variance_floor,
-            theta_update=theta_update,
-            mom_enforce_nonneg=mom_enforce_nonneg,
             verbose=verbose,
         )
         H = fit_init[0].copy()
@@ -1461,8 +1404,6 @@ def fit_pfactor(
                 init=init_j,
                 fix_sigma2_e=True,
                 variance_floor=variance_floor,
-                theta_update=theta_update,
-                mom_enforce_nonneg=mom_enforce_nonneg,
                 eigvecs_list=eigvecs_list,
             )
             H[:, j] = rank1["h"]
@@ -1500,8 +1441,6 @@ def fit_pfactor(
                     eigvals_list=eigvals_list, eigvecs_list=eigvecs_list,
                     K_age_inv=K_age_inv,
                     variance_floor=variance_floor,
-                    theta_update=theta_update,
-                    mom_enforce_nonneg=mom_enforce_nonneg,
                     random_state=random_state + n_merges_done * 97,
                     N=N, G=G,
                 )
@@ -1539,7 +1478,6 @@ def fit_pfactor(
         converged=(rel_change < tol),
         last_change=rel_change,
         n_merges=n_merges_done,
-        theta_update=str(theta_update),
     )
 
     # -----------------------------
@@ -1648,8 +1586,6 @@ def fit_pfactor_auto(
     verbose=1,
     backfit_max_sweeps=500,
     backfit_tol=1e-3,
-    theta_update="mm",
-    mom_enforce_nonneg=False,
     prune_energy_frac=1e-2,
     merge_threshold=0.9,
     max_merges=5,
@@ -1701,8 +1637,6 @@ def fit_pfactor_auto(
             random_state=random_state + j,
             verbose=(verbose >= 2),
             variance_floor=variance_floor,
-            theta_update=theta_update,
-            mom_enforce_nonneg=mom_enforce_nonneg,
             eigvecs_list=eigvecs_list,
         )
         h_j = rank1["h"]
@@ -1786,7 +1720,6 @@ def fit_pfactor_auto(
         inner_rank1_iters=inner_rank1_iters, inner_rank1_tol=inner_rank1_tol,
         tol=backfit_tol, variance_floor=variance_floor,
         random_state=random_state, verbose=verbose,
-        theta_update=theta_update, mom_enforce_nonneg=mom_enforce_nonneg,
         eigvals_list=eigvals_list, eigvecs_list=eigvecs_list,
         merge_threshold=merge_threshold, max_merges=max_merges,
     )

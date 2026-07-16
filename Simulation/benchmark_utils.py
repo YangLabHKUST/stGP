@@ -439,8 +439,6 @@ def run_stgp_pfactor(
     max_sweeps: int = 500,
     inner_rank1_iters: int = 500,
     random_state: int = 0,
-    theta_update: str = "mm",
-    mom_enforce_nonneg: bool = False,
     method_name: Optional[str] = None,
     **kwargs,
 ) -> MethodResult:
@@ -463,8 +461,6 @@ def run_stgp_pfactor(
         max_sweeps=max_sweeps,
         inner_rank1_iters=inner_rank1_iters,
         random_state=random_state,
-        theta_update=theta_update,
-        mom_enforce_nonneg=mom_enforce_nonneg,
         **kwargs,
     )
     runtime = time.perf_counter() - start
@@ -481,7 +477,7 @@ def run_stgp_pfactor(
         "centered_gene_stats": centered_stats,
     }
     if method_name is None:
-        method_name = "stGP-rankp" if theta_update == "mm" else f"stGP-rankp-{theta_update}"
+        method_name = "stGP-rankp"
     return MethodResult(
         name=method_name,
         W=np.asarray(res["W"], dtype=float),
